@@ -1,9 +1,6 @@
 from db import db
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# Your database models should go here.
-# Check out the Flask-SQLAlchemy quickstart for some good docs!
-# https://flask-sqlalchemy.palletsprojects.com/en/2.x/quickstart/
 
 # Defines the association table for a many-to-many relationship between clubs and tags
 clubs_to_tags = db.Table('clubs_to_tags',
@@ -18,7 +15,6 @@ user_to_favorite_club = db.Table('user_to_favorite_club',
                                  db.Column('club_id', db.Integer, db.ForeignKey('club.id'), primary_key=True),
                                  db.Index('index_users_to_club', 'user_id', 'club_id')
                                  )
-
 
 
 # Each model has a column for a unique id, which makes searching and comparing inside a model more efficient.
@@ -37,7 +33,7 @@ class Club(db.Model):
 
     tags = db.relationship('Tag', secondary=clubs_to_tags, back_populates='clubs')
     users = db.relationship('User', secondary=user_to_favorite_club, back_populates='fav_clubs')
-    comments = db.relationship('ClubComments', back_populates='club')
+    comments = db.relationship('Comment', back_populates='club')
 
     def to_dict(self):
         return {
@@ -78,7 +74,7 @@ class User(db.Model):
     grad_year = db.Column(db.Integer, nullable=False)
     
     fav_clubs = db.relationship('Club', secondary=user_to_favorite_club, back_populates='users')
-    comments = db.relationship('ClubComments', back_populates='user')
+    comments = db.relationship('Comment', back_populates='user')
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -110,16 +106,18 @@ class User(db.Model):
             "fav_clubs": [club.name for club in self.fav_clubs]
         }
     
-class ClubComments(db.Model):
-    __tablename__ = 'club_comments'
+# Defines the Comment model. Includes a table of values for the 
+# comment's user, club, parent comment, text, and timestamp.
+class Comment(db.Model):
+    __tablename__ = 'comments'
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     user = db.relationship('User', back_populates='comments')
     club_id = db.Column(db.Integer, db.ForeignKey('club.id'), nullable=False)
     club = db.relationship('Club', back_populates='comments')
-    parent_comment_id = db.Column(db.Integer, db.ForeignKey('club_comments.id'), nullable=True)
-    parent_comment = db.relationship('ClubComments', remote_side=[id], backref='replies')
+    parent_comment_id = db.Column(db.Integer, db.ForeignKey('comments.id'), nullable=True)
+    parent_comment = db.relationship('Comment', remote_side=[id], backref='replies')
     text = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, server_default=db.func.now())
     

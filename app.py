@@ -1,8 +1,12 @@
 from flask import Flask, request, jsonify
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
+from functools import wraps
 import os
 from db import db
+import jwt
+import datetime
+from auth_middleware import token_required
 
 DB_FILE = "clubreview.db"
 
@@ -26,7 +30,6 @@ GET /api/users/<int:user_id>/comments: Returns all comments by a user with the g
 PUT /api/users/<int:user_id>/clubs/<string:code>/favorite: Lets a student favorite a club.
 PUT /api/users/<int:user_id>/clubs/<string:code>/unfavorite: Lets a student unfavorite a club.
 PUT /api/clubs/<string:code>: Modifies a club.
-PUT /api/users/<int:user_id>/clubs/<string:code>/comment/<int:comment_id>: Edits a comment about a club with the given code.
 POST /api/clubs: Creates a new club with a code, name, description, and tags.
 POST /api/users/<int:user_id>/clubs/<string:code>/comments: Adds a comment to a club with the given code.
 POST /api/users/<int:user_id>/clubs/<string:code>/comments/<int:comment_id>: Replies to a comment about a club with the given code.
@@ -45,6 +48,32 @@ def main():
 @app.route("/api")
 def api():
     return jsonify({"message": "Welcome to the Penn Club Review API!"})
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+    
+    if not username or not password:
+        return jsonify({"message": "Username and password required"}), 400
+
+    user = db.session.query(User).filter_by(username=username).first()
+
+    if user is None or not user.check_password(password):
+        return jsonify({"message": "Invalid credentials"}), 401
+
+    expiration_time = datetime.datetime.utcnow() + datetime.timedelta(minutes=30)
+    print(expiration_time)
+
+    token = jwt.encode(
+        {"user_id": user.id,
+         'exp': expiration_time},
+        app.config['SECRET_KEY'],
+        algorithm="HS256"
+    )
+
+    return jsonify({"token": token}), 200
 
 
 # Returns all clubs in the database as a JSON object. If there are no clubs, returns an empty list.
@@ -122,9 +151,13 @@ def get_user_comments(user_id: int):
 # If the user or club is not found, returns a 404 error.
 # If the club is already in the user's favorites, doesn't change the database and immediately returns a 200 error.
 @app.route("/api/users/<int:user_id>/clubs/<string:code>/favorite", methods=["PUT"])
-def add_favorite_club(user_id: int, code: str):
-    user = User.query.get(user_id)
-    club = Club.query.filter_by(code=code).first()
+@token_required
+def add_favorite_club(current_user, user_id: int, code: str):
+    if current_user.id != user_id:
+        return jsonify({"message": "You are not authorized to favorite clubs for another user."}), 403
+    
+    user = db.session.get(User, user_id)
+    club = db.session.query(Club).filter_by(code=code).first()
 
     if user is None or club is None:
         return jsonify({"message": "User or Club not found"}), 404
@@ -142,7 +175,11 @@ def add_favorite_club(user_id: int, code: str):
 # If the user or club is not found, returns a 404 error.
 # If the club is already in the user's favorites, doesn't change the database and immediately returns a 200 error.
 @app.route("/api/users/<int:user_id>/clubs/<string:code>/unfavorite", methods=["PUT"])
-def remove_favorite_club(user_id: int, code: str):
+@token_required
+def remove_favorite_club(current_user, user_id: int, code: str):
+    if current_user.id != user_id:
+        return jsonify({"message": "You are not authorized to favorite clubs for another user."}), 403
+
     user = db.session.get(User, user_id)
     club = db.session.query(Club).filter_by(code=code).first()
 
@@ -206,7 +243,7 @@ def create_club():
     club = Club(code=data['code'], name=data['name'], description=data['description'])
     db.session.add(club)
     tag_names = data['tags']
-    existing_tags = Tag.query.filter(Tag.name.in_(tag_names)).all()
+    existing_tags = db.session.query(Tag).filter(Tag.name.in_(tag_names)).all()
     existing_tag_names = [tag.name for tag in existing_tags]
     for tag_name in tag_names:
         if tag_name not in existing_tag_names:
@@ -224,42 +261,52 @@ def create_club():
 # If the request is not JSON, returns a 400 error.
 # If the request does not contain a comment, returns a 400 error.
 # If the club is not found, returns a 404 error.
-@app.route("/api/users/<int:user_id>/clubs/<string:code>/comment", methods=["POST"])
-def add_comment(user_id: int, code: str):
+@app.route("/api/users/<int:user_id>/clubs/<string:code>/comments", methods=["POST"])
+@token_required
+def add_comment(current_user, user_id: int, code: str):
+    if current_user.id != user_id:
+        return jsonify({"message": "You are not authorized to comment for another user."}), 403
+
     if not request.is_json:
         return jsonify({"message": "Request must be JSON"}), 400
     data = request.get_json()
     if "text" not in data:
         return jsonify({"message": "Request must contain text"}), 400
 
-    club = db.session.get(Club, code)
+    club = db.session.query(Club).filter_by(code=code).first()
     if club is None:
         return jsonify({"message": "Club not found"}), 404
 
-    comment = ClubComments(user_id=user_id, club_id=club.id, text=data["text"])
+    comment = Comment(user_id=user_id, club_id=club.id, text=data["text"])
     db.session.add(comment)
     db.session.commit()
 
     return jsonify({"message": "Comment added"}), 200
 
-# Adds a comment to a club with the given code. This must be a reply to another comment.
+# Adds a reply to another comment
 # If the request is not JSON, returns a 400 error.
 # If the request does not contain a comment, returns a 400 error.
 # If the club is not found, returns a 404 error.
-@app.route("/api/users/<int:user_id>/clubs/<string:code>/comment/<int:comment_id>", methods=["POST"])
-def add_reply(user_id: int, code: str, comment_id: int):
+@app.route("/api/users/<int:user_id>/clubs/<string:code>/comments/<int:comment_id>", methods=["POST"])
+@token_required
+def add_reply(current_user, user_id: int, code: str, comment_id: int):
+    if current_user.id != user_id:
+        return jsonify({"message": "You are not authorized to comment for another user."}), 403
+
     if not request.is_json:
         return jsonify({"message": "Request must be JSON"}), 400
     data = request.get_json()
     if "text" not in data:
         return jsonify({"message": "Request must contain text"}), 400
 
-    comment_to_reply = db.session.get(ClubComments, comment_id)
+    comment_to_reply = db.session.get(Comment, comment_id)
+    if comment_to_reply is None:
+        return jsonify({"message": "Comment not found"}), 404
     club = comment_to_reply.club
     if club is None:
         return jsonify({"message": "Club not found"}), 404
 
-    comment = ClubComments(user_id=user_id, club_id=club.id, text=data["text"], parent_comment_id=comment_id)
+    comment = Comment(user_id=user_id, club_id=club.id, text=data["text"], parent_comment_id=comment_id)
     db.session.add(comment)
     db.session.commit()
 
