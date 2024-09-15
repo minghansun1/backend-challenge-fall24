@@ -8,3 +8,5 @@
 
 
 Installed with --no--root flag since this doesn't need to be a package
+
+Done in poetry virtual environment using 'poetry shell'

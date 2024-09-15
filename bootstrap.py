@@ -2,7 +2,8 @@ import os
 import json
 import time
 
-from app import app, db, DB_FILE
+from app import app, DB_FILE
+from db import db
 from models import *
 
 # This file is used to bootstrap the database with initial data.
@@ -11,9 +12,14 @@ from models import *
 
 def create_user():
     user_josh = User(username="josh", email="josh@seas.upenn.edu", first_name="Josh", last_name="Allen",
-                     school="SEAS", major="CIS", grad_year=2023)
+                     school="Wharton", major="Finance", grad_year=2023)
     user_josh.set_password("password")
     db.session.add(user_josh)
+
+    user_minghan = User(username="minghan", email="minghan@seas.upenn.edu", first_name="Minghan", last_name="Sun",
+                     school="SEAS", major="CIS", grad_year=2027)
+    user_minghan.set_password("password")
+    db.session.add(user_minghan)
 
 # Iterates through the clubs.json file and adds each club to the database as an object.
 # Tags are added seperately by adding them to the club's tags list after the club is created.
